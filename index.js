@@ -13,9 +13,11 @@ postal.addWireTap(function( env ) {
 });
 
 var NPM_CONFIG = {
-  registry: 'https://registry.npmjs.org/',
-  loglevel: 'silent'
+  registry: "https://registry.npmjs.org/",
+  loglevel: "silent"
 };
+
+var isSilent = NPM_CONFIG.loglevel === "silent";
 
 var win, repos = [], i = 0;
 
@@ -23,8 +25,8 @@ var TEMPLATE = [
     "### <%= name %>  ",
     " <%= description %>  ",
     "```anvil install <%= name %>```   ",
-    " [Github](<%= link %>)  ",
-    " [NPM](<%= npmLink %>)  \n"
+    " [<%= link %>](<%= link %>)  ",
+    " [<%= npmLink %>](<%= npmLink %>)  \n"
     ].join( "\n" );
 
 var SearchFSM = machina.Fsm.extend({
@@ -37,8 +39,6 @@ var SearchFSM = machina.Fsm.extend({
 
 
                 npm.load( NPM_CONFIG, function (err, npm) {
-                    var isSilent = NPM_CONFIG.loglevel === 'silent';
-
                     npm.commands.search(['/^anvil'], isSilent, function (err, results) {
                         self.handle( "npm.anvil.retrieved", results );
                     });
@@ -46,8 +46,28 @@ var SearchFSM = machina.Fsm.extend({
 
             },
             "npm.anvil.retrieved": function( plugins ) {
-                this.plugins = plugins;
-                this.transition( "done" );
+                this.list = _.keys( plugins );
+
+                this.handle( "npm.anvil.plugin" );
+            },
+            "npm.anvil.plugin": function( plugins ) {
+                if ( this.list.length === 0 || typeof this.list[ 0 ] === "undefined" ) {
+                    this.transition( "done" );
+                    return;
+                }
+                
+                console.log( "retrieving: " + this.list[0] );
+
+                npm.commands.view( [ this.list[ 0 ] ], isSilent, function( err, results ) {
+                    this.handle( "npm.anvil.plugin.retrieved", results, plugins );
+                }.bind( this ));
+            },
+            "npm.anvil.plugin.retrieved": function( plugin ) {
+                var version = _.keys( plugin )[ 0 ];
+                this.plugins.push( plugin[ version ] );
+
+                this.list.shift();
+                this.handle( "npm.anvil.plugin" );
             }
         },
         done: {
@@ -55,17 +75,18 @@ var SearchFSM = machina.Fsm.extend({
                 var template = _.template( TEMPLATE ),
                     content = [];
 
-                _.each( this.plugins, function( repo ) {
-                    repo.link = "http://github.com/" + repo.maintainers[0].replace(/_|=/g, "" ) + "/" + repo.name;
-                    repo.npmLink = "https://npmjs.org/package/" + repo.name;
+                _.each( this.plugins, function( plugin ) {
+                    plugin.link = plugin.repository.url.replace( "git://", "http://" ).replace( /.git$/, "");
+                    plugin.npmLink = "https://npmjs.org/package/" + plugin.name;
                    
-                    content.push( template( repo ));
+                    content.push( template( plugin ));
                 });
 
                 fs.writeFile( "./plugins.md", content.join( "\n" ) , function (err) {
                     console.log( "done with " + _.keys(this.plugins).length + " found..." );
                     process.exit( 0 );
                 }.bind( this ));
+                
             }
         }
     }
@@ -73,8 +94,11 @@ var SearchFSM = machina.Fsm.extend({
 
 var App = function() {
     this.plugins = [];
+    this.list = [];
+
     this.search = new SearchFSM({
-        plugins: this.plugins
+        plugins: this.plugins,
+        list: this.list
     });
 
     this.search.handle( "npm.anvil" );
